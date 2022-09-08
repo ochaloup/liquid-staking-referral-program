@@ -24,4 +24,6 @@ pub enum ReferralError {
     TreasuryTokenAccountMustNotBeDelegated,
     #[msg("Treasury token account must not be closeable")]
     TreasuryTokenAccountMustNotBeCloseable,
+    #[msg("Referral operation fee was set over the maximum permitted amount")]
+    ReferralOperationFeeOverMax,
 }

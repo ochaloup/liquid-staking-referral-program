@@ -56,9 +56,19 @@ pub mod marinade_referral {
         ctx: Context<UpdateReferral>,
         transfer_duration: u32,
         pause: bool,
-        optional_new_partner_account: Option<Pubkey>
+        optional_new_partner_account: Option<Pubkey>,
+        operation_deposit_sol_fee: Option<u8>,
+        operation_deposit_stake_account_fee: Option<u8>,
+        operation_liquid_unstake_fee: Option<u8>,
     ) -> ProgramResult {
-        ctx.accounts.process(transfer_duration, pause, optional_new_partner_account)
+        ctx.accounts.process(
+            transfer_duration,
+            pause,
+            optional_new_partner_account,
+            operation_deposit_sol_fee,
+            operation_deposit_stake_account_fee,
+            operation_liquid_unstake_fee,
+        )
     }
 
     ///update partner, authority and beneficiary account based on the new partner
