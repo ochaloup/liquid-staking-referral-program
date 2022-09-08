@@ -4,6 +4,7 @@ use anchor_spl::token::TokenAccount;
 use std::str::FromStr;
 
 use crate::constant::*;
+use crate::error::ReferralError::ReferralOperationFeeOverMax;
 use crate::error::*;
 use crate::states::{GlobalState, ReferralState};
 
@@ -124,6 +125,11 @@ impl<'info> InitReferralAccount<'info> {
 
         self.referral_state.pause = false;
 
+        self.referral_state.max_operation_fee = DEFAULT_MAX_OPERATION_FEE_POINTS;
+        self.referral_state.operation_deposit_sol_fee = 0;
+        self.referral_state.operation_deposit_stake_account_fee = 0;
+        self.referral_state.operation_liquid_unstake_fee = 0;
+
         Ok(())
     }
 }
@@ -177,6 +183,9 @@ impl<'info> UpdateReferral<'info> {
         transfer_duration: u32,
         pause: bool,
         optional_new_partner_account: Option<Pubkey>,
+        operation_deposit_sol_fee: Option<u8>,
+        operation_deposit_stake_account_fee: Option<u8>,
+        operation_liquid_unstake_fee: Option<u8>,
     ) -> ProgramResult {
         self.referral_state.transfer_duration = transfer_duration;
         self.referral_state.pause = pause;
@@ -184,6 +193,34 @@ impl<'info> UpdateReferral<'info> {
         if let Some(new_partner_account) = optional_new_partner_account {
             self.referral_state.partner_account = new_partner_account
         }
+        if let Some(operation_deposit_sol_fee) = self.cap_fee(operation_deposit_sol_fee)? {
+            self.referral_state.operation_deposit_sol_fee = operation_deposit_sol_fee;
+        }
+        if let Some(operation_deposit_stake_account_fee) =
+            self.cap_fee(operation_deposit_stake_account_fee)?
+        {
+            self.referral_state.operation_deposit_stake_account_fee =
+                operation_deposit_stake_account_fee;
+        }
+        if let Some(operation_liquid_unstake_fee) = self.cap_fee(operation_liquid_unstake_fee)? {
+            self.referral_state.operation_liquid_unstake_fee = operation_liquid_unstake_fee;
+        }
+
         Ok(())
+    }
+
+    fn cap_fee(&self, new_fee: Option<u8>) -> std::result::Result<Option<u8>, ReferralError> {
+        if let Some(new_fee) = new_fee {
+            // considering the fee is calculated as basis points
+            if new_fee > self.referral_state.max_operation_fee {
+                msg!(
+                    "Operation fee value {} is over maximal permitted {}; in basis points",
+                    new_fee,
+                    self.referral_state.max_operation_fee
+                );
+                return Err(ReferralOperationFeeOverMax);
+            }
+        }
+        Ok(new_fee)
     }
 }

@@ -77,6 +77,12 @@ pub struct ReferralState {
 
     // emergency-pause flag (bool)
     pub pause: bool,
+
+    // fees that will be assigned to referrals, calculated in basis points
+    pub max_operation_fee: u8, // TODO: should this be configurable or a const in program? Does it matter the size of the referral state account?
+    pub operation_deposit_sol_fee: u8,
+    pub operation_deposit_stake_account_fee: u8,
+    pub operation_liquid_unstake_fee: u8,
 }
 
 impl ReferralState {

@@ -699,6 +699,7 @@ dependencies = [
  "marinade-finance",
  "marinade-onchain-helper",
  "solana-program",
+ "spl-token",
 ]
 
 [[package]]
