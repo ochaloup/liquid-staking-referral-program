@@ -1,7 +1,7 @@
 anchor_version = "0.14.0"
 
 [programs.localnet]
-marinade_referral = "mRefx8ypXNxE59NhoBqwqb3vTvjgf8MYECp4kgJWiDY"
+marinade_referral = "NTxC2LBrYLBtCmzTUJCWTxiHMYCJfeiEgzkhxCaGM3S"
 
 [programs.devnet]
 marinade_referral = "mRefx8ypXNxE59NhoBqwqb3vTvjgf8MYECp4kgJWiDY"

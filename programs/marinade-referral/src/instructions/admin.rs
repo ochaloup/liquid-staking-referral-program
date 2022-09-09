@@ -1,7 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::clock;
 use anchor_spl::token::TokenAccount;
-use std::str::FromStr;
 
 use crate::constant::*;
 use crate::error::*;
@@ -14,10 +13,8 @@ pub struct Initialize<'info> {
     #[account(signer)]
     pub admin_account: AccountInfo<'info>,
 
-    #[account(
-        zero,
-        address = Pubkey::from_str(GLOBAL_STATE_ADDRESS).unwrap(),
-    )]
+    // address = Pubkey::from_str(GLOBAL_STATE_ADDRESS).unwrap(),
+    #[account(zero)]
     pub global_state: ProgramAccount<'info, GlobalState>,
 
     // mSOL treasury account for this referral program (must be fed externally)
@@ -27,12 +24,14 @@ pub struct Initialize<'info> {
 }
 impl<'info> Initialize<'info> {
     pub fn process(&mut self, treasury_msol_auth_bump: u8) -> ProgramResult {
+        msg!("Initialize admin account: {}, global state account: {}", self.admin_account.key(), self.global_state.key());
         self.global_state.admin_account = self.admin_account.key();
         self.global_state.treasury_msol_auth_bump = treasury_msol_auth_bump;
         self.global_state.treasury_msol_account = self.treasury_msol_account.key();
 
         // verify the treasury account auth is this program get_treasury_auth() PDA (based on treasury_msol_auth_bump)
         if self.treasury_msol_account.owner != self.global_state.get_treasury_auth() {
+            msg!("Treasure msol account owner: {}, treaasure auth: {}", self.treasury_msol_account.owner, self.global_state.get_treasury_auth());
             return Err(ReferralError::TreasuryTokenAuthorityDoesNotMatch.into());
         }
 
@@ -52,10 +51,10 @@ impl<'info> Initialize<'info> {
 #[derive(Accounts)]
 pub struct InitReferralAccount<'info> {
     // global state
+    // address = Pubkey::from_str(GLOBAL_STATE_ADDRESS).unwrap(),
     #[account(
-        has_one = admin_account,
+    has_one = admin_account,
         has_one = treasury_msol_account,
-        address = Pubkey::from_str(GLOBAL_STATE_ADDRESS).unwrap(),
     )]
     pub global_state: ProgramAccount<'info, GlobalState>,
 
@@ -132,10 +131,10 @@ impl<'info> InitReferralAccount<'info> {
 #[derive(Accounts)]
 pub struct ChangeAuthority<'info> {
     // global state
+    // address = Pubkey::from_str(GLOBAL_STATE_ADDRESS).unwrap(),
     #[account(
-        mut,
+    mut,
         has_one = admin_account,
-        address = Pubkey::from_str(GLOBAL_STATE_ADDRESS).unwrap(),
     )]
     pub global_state: ProgramAccount<'info, GlobalState>,
 
@@ -157,9 +156,9 @@ impl<'info> ChangeAuthority<'info> {
 #[derive(Accounts)]
 pub struct UpdateReferral<'info> {
     // global state
+    // address = Pubkey::from_str(GLOBAL_STATE_ADDRESS).unwrap(),
     #[account(
         has_one = admin_account,
-        address = Pubkey::from_str(GLOBAL_STATE_ADDRESS).unwrap(),
     )]
     pub global_state: ProgramAccount<'info, GlobalState>,
 

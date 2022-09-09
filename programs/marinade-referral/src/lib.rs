@@ -17,7 +17,7 @@ pub mod states;
 pub mod marinade_referral {
     use super::*;
 
-    declare_id!("mRefx8ypXNxE59NhoBqwqb3vTvjgf8MYECp4kgJWiDY");
+    declare_id!("NTxC2LBrYLBtCmzTUJCWTxiHMYCJfeiEgzkhxCaGM3S");
 
     ///deposit SOL
     pub fn deposit(ctx: Context<Deposit>, lamports: u64) -> ProgramResult {
