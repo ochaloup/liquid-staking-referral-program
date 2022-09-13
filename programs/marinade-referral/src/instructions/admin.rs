@@ -192,6 +192,7 @@ impl<'info> UpdateReferral<'info> {
         // change partner_account if sent
         if let Some(new_partner_account) = optional_new_partner_account {
             self.referral_state.partner_account = new_partner_account
+            // TODO: should not be here thee required to change the ATA account?
         }
         if let Some(operation_deposit_sol_fee) = self.cap_fee(operation_deposit_sol_fee)? {
             self.referral_state.operation_deposit_sol_fee = operation_deposit_sol_fee;
