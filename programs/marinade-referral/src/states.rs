@@ -1,4 +1,3 @@
-use crate::constant::MSOL_TREASURY_AUTH_SEED;
 use anchor_lang::prelude::*;
 use marinade_finance::{calc::proportional, error::CommonError, Fee};
 
@@ -8,23 +7,6 @@ use marinade_finance::{calc::proportional, error::CommonError, Fee};
 pub struct GlobalState {
     // Authority (admin address)
     pub admin_account: Pubkey,
-
-    // treasury_msol_account to the referral program - must be fed externally
-    pub treasury_msol_account: Pubkey,
-    // bump seed for treasury_msol_account auth pda
-    pub treasury_msol_auth_bump: u8,
-}
-impl GlobalState {
-    pub fn get_treasury_auth(&self) -> Pubkey {
-        Pubkey::create_program_address(
-            &[
-                &MSOL_TREASURY_AUTH_SEED[..],
-                &[self.treasury_msol_auth_bump],
-            ],
-            &crate::ID,
-        )
-        .unwrap()
-    }
 }
 
 //-----------------------------------------------------
@@ -36,13 +18,8 @@ pub struct ReferralState {
 
     // partner Beneficiary account (native account)
     pub partner_account: Pubkey,
-    // token account where to make payment (ATA mSOL address for partner_account)
-    pub token_partner_account: Pubkey,
-
-    // Transfer-periodicity-seconds (u32 amount of seconds, default: a month)
-    pub transfer_duration: u32,
-    // Last transfer to partner timestamp (u64, unix timestamp)
-    pub last_transfer_time: i64,
+    // token account where to make payment (mSOL address for partner_account)
+    pub msol_token_partner_account: Pubkey,
 
     // accumulated deposit-sol amount (SOL, u64)
     pub deposit_sol_amount: u64,
@@ -78,11 +55,11 @@ pub struct ReferralState {
     // emergency-pause flag (bool)
     pub pause: bool,
 
-    // fees that will be assigned to referrals, calculated in basis points
-    pub max_operation_fee: u8, // TODO: should this be configurable or a const in program? Does it matter the size of the referral state account?
-    pub operation_deposit_sol_fee: u8,
-    pub operation_deposit_stake_account_fee: u8,
-    pub operation_liquid_unstake_fee: u8,
+    // fees that will be assigned to referrals per operation, calculated in basis points
+    pub operation_deposit_sol_fee: Fee,
+    pub operation_deposit_stake_account_fee: Fee,
+    pub operation_liquid_unstake_fee: Fee,
+    pub operation_delayed_unstake_fee: Fee,
 }
 
 impl ReferralState {

@@ -1,12 +1,12 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::clock;
 use anchor_spl::token::TokenAccount;
-use std::str::FromStr;
 
 use crate::constant::*;
 use crate::error::ReferralError::ReferralOperationFeeOverMax;
 use crate::error::*;
 use crate::states::{GlobalState, ReferralState};
+
+use marinade_finance::{Fee};
 
 //-----------------------------------------------------
 #[derive(Accounts)]
@@ -15,36 +15,12 @@ pub struct Initialize<'info> {
     #[account(signer)]
     pub admin_account: AccountInfo<'info>,
 
-    #[account(
-        zero,
-        address = Pubkey::from_str(GLOBAL_STATE_ADDRESS).unwrap(),
-    )]
+    #[account(zero)]
     pub global_state: ProgramAccount<'info, GlobalState>,
-
-    // mSOL treasury account for this referral program (must be fed externally)
-    // owner must be self.global_state.get_treasury_auth()
-    #[account()]
-    pub treasury_msol_account: CpiAccount<'info, TokenAccount>,
 }
 impl<'info> Initialize<'info> {
-    pub fn process(&mut self, treasury_msol_auth_bump: u8) -> ProgramResult {
+    pub fn process(&mut self) -> ProgramResult {
         self.global_state.admin_account = self.admin_account.key();
-        self.global_state.treasury_msol_auth_bump = treasury_msol_auth_bump;
-        self.global_state.treasury_msol_account = self.treasury_msol_account.key();
-
-        // verify the treasury account auth is this program get_treasury_auth() PDA (based on treasury_msol_auth_bump)
-        if self.treasury_msol_account.owner != self.global_state.get_treasury_auth() {
-            return Err(ReferralError::TreasuryTokenAuthorityDoesNotMatch.into());
-        }
-
-        if self.treasury_msol_account.delegate.is_some() {
-            return Err(ReferralError::TreasuryTokenAccountMustNotBeDelegated.into());
-        }
-
-        if self.treasury_msol_account.close_authority.is_some() {
-            return Err(ReferralError::TreasuryTokenAccountMustNotBeCloseable.into());
-        }
-
         Ok(())
     }
 }
@@ -55,8 +31,6 @@ pub struct InitReferralAccount<'info> {
     // global state
     #[account(
         has_one = admin_account,
-        has_one = treasury_msol_account,
-        address = Pubkey::from_str(GLOBAL_STATE_ADDRESS).unwrap(),
     )]
     pub global_state: ProgramAccount<'info, GlobalState>,
 
@@ -77,7 +51,7 @@ pub struct InitReferralAccount<'info> {
 
     // partner beneficiary mSOL ATA
     #[account()]
-    pub token_partner_account: CpiAccount<'info, TokenAccount>,
+    pub msol_token_partner_account: CpiAccount<'info, TokenAccount>,
 }
 
 impl<'info> InitReferralAccount<'info> {
@@ -89,22 +63,19 @@ impl<'info> InitReferralAccount<'info> {
         }
 
         // check if beneficiary account address matches to partner_address and msol_mint
-        if self.token_partner_account.owner != *self.partner_account.key {
+        if self.msol_token_partner_account.owner != *self.partner_account.key {
             return Err(ReferralError::InvalidBeneficiaryAccountOwner.into());
         }
 
         // verify the partner token account mint equals to treasury_msol_account
-        if self.token_partner_account.mint != self.treasury_msol_account.mint {
+        if self.msol_token_partner_account.mint != self.treasury_msol_account.mint {
             return Err(ReferralError::InvalidBeneficiaryAccountMint.into());
         }
 
         self.referral_state.partner_name = partner_name.clone();
 
         self.referral_state.partner_account = self.partner_account.key();
-        self.referral_state.token_partner_account = self.token_partner_account.key();
-
-        self.referral_state.transfer_duration = DEFAULT_TRANSFER_DURATION;
-        self.referral_state.last_transfer_time = clock::Clock::get().unwrap().unix_timestamp;
+        self.referral_state.msol_token_partner_account = self.msol_token_partner_account.key();
 
         self.referral_state.deposit_sol_amount = 0;
         self.referral_state.deposit_sol_operations = 0;
@@ -125,10 +96,10 @@ impl<'info> InitReferralAccount<'info> {
 
         self.referral_state.pause = false;
 
-        self.referral_state.max_operation_fee = DEFAULT_MAX_OPERATION_FEE_POINTS;
-        self.referral_state.operation_deposit_sol_fee = 0;
-        self.referral_state.operation_deposit_stake_account_fee = 0;
-        self.referral_state.operation_liquid_unstake_fee = 0;
+        self.referral_state.operation_deposit_sol_fee = Fee::from_basis_points(DEFAULT_OPERATION_FEE_POINTS);
+        self.referral_state.operation_deposit_stake_account_fee = Fee::from_basis_points(DEFAULT_OPERATION_FEE_POINTS);
+        self.referral_state.operation_liquid_unstake_fee = Fee::from_basis_points(DEFAULT_OPERATION_FEE_POINTS);
+        self.referral_state.operation_delayed_unstake_fee = Fee::from_basis_points(DEFAULT_OPERATION_FEE_POINTS);
 
         Ok(())
     }
@@ -138,11 +109,7 @@ impl<'info> InitReferralAccount<'info> {
 #[derive(Accounts)]
 pub struct ChangeAuthority<'info> {
     // global state
-    #[account(
-        mut,
-        has_one = admin_account,
-        address = Pubkey::from_str(GLOBAL_STATE_ADDRESS).unwrap(),
-    )]
+    #[account(mut, has_one = admin_account)]
     pub global_state: ProgramAccount<'info, GlobalState>,
 
     // current admin account (must match the one in GlobalState)
@@ -165,7 +132,6 @@ pub struct UpdateReferral<'info> {
     // global state
     #[account(
         has_one = admin_account,
-        address = Pubkey::from_str(GLOBAL_STATE_ADDRESS).unwrap(),
     )]
     pub global_state: ProgramAccount<'info, GlobalState>,
 
@@ -180,48 +146,45 @@ pub struct UpdateReferral<'info> {
 impl<'info> UpdateReferral<'info> {
     pub fn process(
         &mut self,
-        transfer_duration: u32,
         pause: bool,
-        optional_new_partner_account: Option<Pubkey>,
+        new_partner_account: Option<Pubkey>,
         operation_deposit_sol_fee: Option<u8>,
         operation_deposit_stake_account_fee: Option<u8>,
         operation_liquid_unstake_fee: Option<u8>,
+        operation_delayed_unstake_fee: Option<u8>,
     ) -> ProgramResult {
-        self.referral_state.transfer_duration = transfer_duration;
         self.referral_state.pause = pause;
+
         // change partner_account if sent
-        if let Some(new_partner_account) = optional_new_partner_account {
+        if let Some(new_partner_account) = new_partner_account {
             self.referral_state.partner_account = new_partner_account
-            // TODO: should not be here thee required to change the ATA account?
         }
-        if let Some(operation_deposit_sol_fee) = self.cap_fee(operation_deposit_sol_fee)? {
-            self.referral_state.operation_deposit_sol_fee = operation_deposit_sol_fee;
-        }
-        if let Some(operation_deposit_stake_account_fee) =
-            self.cap_fee(operation_deposit_stake_account_fee)?
-        {
-            self.referral_state.operation_deposit_stake_account_fee =
-                operation_deposit_stake_account_fee;
-        }
-        if let Some(operation_liquid_unstake_fee) = self.cap_fee(operation_liquid_unstake_fee)? {
-            self.referral_state.operation_liquid_unstake_fee = operation_liquid_unstake_fee;
-        }
+
+        self.referral_state.operation_deposit_sol_fee =
+            self.checked_operation_fee(operation_deposit_sol_fee, self.referral_state.operation_deposit_sol_fee)?;
+        self.referral_state.operation_deposit_stake_account_fee =
+            self.checked_operation_fee(operation_deposit_stake_account_fee, self.referral_state.operation_deposit_stake_account_fee)?;
+        self.referral_state.operation_liquid_unstake_fee =
+            self.checked_operation_fee(operation_liquid_unstake_fee, self.referral_state.operation_liquid_unstake_fee)?;
+        self.referral_state.operation_delayed_unstake_fee =
+            self.checked_operation_fee(operation_delayed_unstake_fee, self.referral_state.operation_delayed_unstake_fee)?;
 
         Ok(())
     }
 
-    fn cap_fee(&self, new_fee: Option<u8>) -> std::result::Result<Option<u8>, ReferralError> {
+    fn checked_operation_fee(&self, new_fee: Option<u8>, default_value: Fee) -> std::result::Result<Fee, ReferralError> {
         if let Some(new_fee) = new_fee {
-            // considering the fee is calculated as basis points
-            if new_fee > self.referral_state.max_operation_fee {
+            // the fee is calculated as basis points
+            if new_fee as u32 > MAX_OPERATION_FEE_POINTS {
                 msg!(
                     "Operation fee value {} is over maximal permitted {}; in basis points",
                     new_fee,
-                    self.referral_state.max_operation_fee
+                    MAX_OPERATION_FEE_POINTS
                 );
                 return Err(ReferralOperationFeeOverMax);
             }
+            return Ok(Fee::from_basis_points(new_fee as u32));
         }
-        Ok(new_fee)
+        Ok(default_value)
     }
 }
