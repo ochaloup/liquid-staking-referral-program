@@ -1,12 +1,13 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::TokenAccount;
+use anchor_spl::token::{Mint, TokenAccount};
+use solana_program::program_pack::IsInitialized;
 
 use crate::constant::*;
 use crate::error::ReferralError::ReferralOperationFeeOverMax;
 use crate::error::*;
 use crate::states::{GlobalState, ReferralState};
 
-use marinade_finance::{Fee};
+use marinade_finance::Fee;
 
 //-----------------------------------------------------
 #[derive(Accounts)]
@@ -17,10 +18,19 @@ pub struct Initialize<'info> {
 
     #[account(zero)]
     pub global_state: ProgramAccount<'info, GlobalState>,
+
+    #[account()]
+    pub msol_mint_account: CpiAccount<'info, Mint>,
 }
 impl<'info> Initialize<'info> {
     pub fn process(&mut self) -> ProgramResult {
         self.global_state.admin_account = self.admin_account.key();
+        self.global_state.msol_mint_account = self.msol_mint_account.key();
+
+        // verify if the account that should be considered as MSOL mint is an active mint account
+        if !self.msol_mint_account.is_initialized() {
+            return Err(ReferralError::NotInitializedMintAccount.into());
+        }
         Ok(())
     }
 }
@@ -38,10 +48,6 @@ pub struct InitReferralAccount<'info> {
     #[account(signer)]
     pub admin_account: AccountInfo<'info>,
 
-    // mSOL treasury account for this referral program (added here to check partner token mint)
-    #[account()]
-    pub treasury_msol_account: CpiAccount<'info, TokenAccount>,
-
     #[account(zero)] // must be created but empty, ready to be initialized
     pub referral_state: ProgramAccount<'info, ReferralState>,
 
@@ -49,7 +55,7 @@ pub struct InitReferralAccount<'info> {
     #[account()]
     pub partner_account: AccountInfo<'info>,
 
-    // partner beneficiary mSOL ATA
+    // partner mSOL beneficiary token account
     #[account()]
     pub msol_token_partner_account: CpiAccount<'info, TokenAccount>,
 }
@@ -63,14 +69,11 @@ impl<'info> InitReferralAccount<'info> {
         }
 
         // check if beneficiary account address matches to partner_address and msol_mint
-        if self.msol_token_partner_account.owner != *self.partner_account.key {
-            return Err(ReferralError::InvalidBeneficiaryAccountOwner.into());
-        }
-
-        // verify the partner token account mint equals to treasury_msol_account
-        if self.msol_token_partner_account.mint != self.treasury_msol_account.mint {
-            return Err(ReferralError::InvalidBeneficiaryAccountMint.into());
-        }
+        check_partner_accounts(
+            &self.partner_account,
+            &self.msol_token_partner_account,
+            &self.global_state.msol_mint_account,
+        )?;
 
         self.referral_state.partner_name = partner_name.clone();
 
@@ -96,13 +99,42 @@ impl<'info> InitReferralAccount<'info> {
 
         self.referral_state.pause = false;
 
-        self.referral_state.operation_deposit_sol_fee = Fee::from_basis_points(DEFAULT_OPERATION_FEE_POINTS);
-        self.referral_state.operation_deposit_stake_account_fee = Fee::from_basis_points(DEFAULT_OPERATION_FEE_POINTS);
-        self.referral_state.operation_liquid_unstake_fee = Fee::from_basis_points(DEFAULT_OPERATION_FEE_POINTS);
-        self.referral_state.operation_delayed_unstake_fee = Fee::from_basis_points(DEFAULT_OPERATION_FEE_POINTS);
+        self.referral_state.operation_deposit_sol_fee =
+            Fee::from_basis_points(DEFAULT_OPERATION_FEE_POINTS);
+        self.referral_state.operation_deposit_stake_account_fee =
+            Fee::from_basis_points(DEFAULT_OPERATION_FEE_POINTS);
+        self.referral_state.operation_liquid_unstake_fee =
+            Fee::from_basis_points(DEFAULT_OPERATION_FEE_POINTS);
+        self.referral_state.operation_delayed_unstake_fee =
+            Fee::from_basis_points(DEFAULT_OPERATION_FEE_POINTS);
 
         Ok(())
     }
+}
+
+fn check_partner_accounts<'info>(
+    partner_account: &AccountInfo<'info>,
+    msol_token_partner_account: &CpiAccount<'info, TokenAccount>,
+    msol_mint_pk: &Pubkey,
+) -> ProgramResult {
+    // check if beneficiary account address matches to partner_address and msol_mint
+    if msol_token_partner_account.owner != *partner_account.key {
+        msg!(
+            "msol token partner account {} has to be owned by partner account {}",
+            msol_token_partner_account.key(),
+            partner_account.key
+        );
+        return Err(ReferralError::InvalidPartnerAccountOwner.into());
+    }
+    if msol_token_partner_account.mint != *msol_mint_pk {
+        msg!(
+            "mint of msol token partner account {} has to be same as global state mint account {}",
+            msol_token_partner_account.key(),
+            msol_mint_pk
+        );
+        return Err(ReferralError::InvalidPartnerAccountMint.into());
+    }
+    Ok(())
 }
 
 //--------------------------------------
@@ -142,12 +174,19 @@ pub struct UpdateReferral<'info> {
     // referral state
     #[account(mut)]
     pub referral_state: ProgramAccount<'info, ReferralState>,
+
+    // partner main account
+    #[account()]
+    pub new_partner_account: AccountInfo<'info>,
+
+    // partner mSOL beneficiary token account
+    #[account()]
+    pub new_msol_token_partner_account: CpiAccount<'info, TokenAccount>,
 }
 impl<'info> UpdateReferral<'info> {
     pub fn process(
         &mut self,
         pause: bool,
-        new_partner_account: Option<Pubkey>,
         operation_deposit_sol_fee: Option<u8>,
         operation_deposit_stake_account_fee: Option<u8>,
         operation_liquid_unstake_fee: Option<u8>,
@@ -155,24 +194,45 @@ impl<'info> UpdateReferral<'info> {
     ) -> ProgramResult {
         self.referral_state.pause = pause;
 
-        // change partner_account if sent
-        if let Some(new_partner_account) = new_partner_account {
-            self.referral_state.partner_account = new_partner_account
+        if *self.new_partner_account.key != self.referral_state.partner_account
+            || self.new_msol_token_partner_account.key()
+                != self.referral_state.msol_token_partner_account
+        {
+            self.referral_state.partner_account = *self.new_partner_account.key;
+            self.referral_state.msol_token_partner_account =
+                self.new_msol_token_partner_account.key();
+            check_partner_accounts(
+                &self.new_partner_account,
+                &self.new_msol_token_partner_account,
+                &self.global_state.msol_mint_account,
+            )?;
         }
 
-        self.referral_state.operation_deposit_sol_fee =
-            self.checked_operation_fee(operation_deposit_sol_fee, self.referral_state.operation_deposit_sol_fee)?;
-        self.referral_state.operation_deposit_stake_account_fee =
-            self.checked_operation_fee(operation_deposit_stake_account_fee, self.referral_state.operation_deposit_stake_account_fee)?;
-        self.referral_state.operation_liquid_unstake_fee =
-            self.checked_operation_fee(operation_liquid_unstake_fee, self.referral_state.operation_liquid_unstake_fee)?;
-        self.referral_state.operation_delayed_unstake_fee =
-            self.checked_operation_fee(operation_delayed_unstake_fee, self.referral_state.operation_delayed_unstake_fee)?;
+        self.referral_state.operation_deposit_sol_fee = self.checked_operation_fee(
+            operation_deposit_sol_fee,
+            self.referral_state.operation_deposit_sol_fee,
+        )?;
+        self.referral_state.operation_deposit_stake_account_fee = self.checked_operation_fee(
+            operation_deposit_stake_account_fee,
+            self.referral_state.operation_deposit_stake_account_fee,
+        )?;
+        self.referral_state.operation_liquid_unstake_fee = self.checked_operation_fee(
+            operation_liquid_unstake_fee,
+            self.referral_state.operation_liquid_unstake_fee,
+        )?;
+        self.referral_state.operation_delayed_unstake_fee = self.checked_operation_fee(
+            operation_delayed_unstake_fee,
+            self.referral_state.operation_delayed_unstake_fee,
+        )?;
 
         Ok(())
     }
 
-    fn checked_operation_fee(&self, new_fee: Option<u8>, default_value: Fee) -> std::result::Result<Fee, ReferralError> {
+    fn checked_operation_fee(
+        &self,
+        new_fee: Option<u8>,
+        default_value: Fee,
+    ) -> std::result::Result<Fee, ReferralError> {
         if let Some(new_fee) = new_fee {
             // the fee is calculated as basis points
             if new_fee as u32 > MAX_OPERATION_FEE_POINTS {

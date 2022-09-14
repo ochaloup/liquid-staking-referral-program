@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
-use solana_program::program_pack::Pack;
 use anchor_spl::token::{transfer, Transfer};
+use solana_program::program_pack::Pack;
 
 use marinade_onchain_helper::{cpi_context_accounts::MarinadeDeposit, cpi_util};
 
@@ -58,7 +58,10 @@ impl<'info> Deposit<'info> {
         let minted_msol = msol_after - msol_before;
         msg!("minted msol {}", minted_msol);
         if minted_msol > 0 {
-            let referral_msol_amount = self.referral_state.operation_deposit_sol_fee.apply(minted_msol);
+            let referral_msol_amount = self
+                .referral_state
+                .operation_deposit_sol_fee
+                .apply(minted_msol);
             if referral_msol_amount > 0 {
                 transfer(
                     CpiContext::new(

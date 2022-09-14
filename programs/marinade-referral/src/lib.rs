@@ -55,7 +55,6 @@ pub mod marinade_referral {
     pub fn update_referral(
         ctx: Context<UpdateReferral>,
         pause: bool,
-        optional_new_partner_account: Option<Pubkey>,
         operation_deposit_sol_fee: Option<u8>,
         operation_deposit_stake_account_fee: Option<u8>,
         operation_liquid_unstake_fee: Option<u8>,
@@ -63,7 +62,6 @@ pub mod marinade_referral {
     ) -> ProgramResult {
         ctx.accounts.process(
             pause,
-            optional_new_partner_account,
             operation_deposit_sol_fee,
             operation_deposit_stake_account_fee,
             operation_liquid_unstake_fee,

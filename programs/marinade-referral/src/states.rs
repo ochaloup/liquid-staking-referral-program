@@ -7,6 +7,9 @@ use marinade_finance::{calc::proportional, error::CommonError, Fee};
 pub struct GlobalState {
     // Authority (admin address)
     pub admin_account: Pubkey,
+
+    // msol mint account to verify the mint of partner msol account (must be fed externally)
+    pub msol_mint_account: Pubkey,
 }
 
 //-----------------------------------------------------
