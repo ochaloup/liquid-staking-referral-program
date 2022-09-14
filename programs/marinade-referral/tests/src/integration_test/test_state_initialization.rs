@@ -1,0 +1,358 @@
+//
+// Integration Test
+// global state and referral state initialization
+// RUSTFLAGS=-Awarnings cargo test test_state_initialization --manifest-path programs/marinade-referral/tests/Cargo.toml
+//
+use crate::{initialize::InitializeInputWithSeeds, integration_test::*};
+use std::sync::Arc;
+
+use rand::SeedableRng;
+use rand_chacha::ChaChaRng;
+
+use marinade_referral::constant::{
+    DEFAULT_BASE_FEE_POINTS, DEFAULT_MAX_FEE_POINTS, DEFAULT_MAX_NET_STAKE,
+    DEFAULT_MAX_OPERATION_FEE_POINTS, DEFAULT_TRANSFER_DURATION,
+};
+use solana_sdk::{
+    pubkey::Pubkey,
+    signature::{Keypair, Signer},
+};
+use test_env_log::test;
+
+async fn init_test() -> anyhow::Result<(IntegrationTest, MarinadeReferralTestGlobals)> {
+    let mut random = ChaChaRng::from_seed([
+        248, 3, 94, 241, 228, 239, 32, 168, 219, 67, 27, 194, 26, 155, 140, 136, 154, 4, 40, 175,
+        132, 80, 60, 31, 135, 250, 230, 19, 172, 106, 254, 120,
+    ]);
+
+    let input = InitializeInputWithSeeds::random(&mut random);
+    let mut test = IntegrationTest::start(&input).await?;
+    let marinade_referrals = init_marinade_referral_test_globals(&mut test).await;
+    Ok((test, marinade_referrals))
+}
+
+pub async fn get_account<T: AccountDeserialize>(
+    test: &mut IntegrationTest,
+    account_pubkey: Pubkey,
+) -> T {
+    AccountDeserialize::try_deserialize(
+        &mut test
+            .context
+            .banks_client
+            .get_account(account_pubkey)
+            .await
+            .unwrap() // force unwrap
+            .unwrap()
+            .data
+            .as_slice(),
+    )
+    .unwrap()
+}
+
+pub async fn change_authority_execute(
+    test: &mut IntegrationTest,
+    global_state: Pubkey,
+    old_admin: Pubkey,
+    new_admin: Pubkey,
+    signer: &Arc<Keypair>,
+) -> Result<(), u32> {
+    let accounts = marinade_referral::accounts::ChangeAuthority {
+        global_state: global_state,
+        admin_account: old_admin,
+        new_admin_account: new_admin,
+    };
+    let ix_data = marinade_referral::instruction::ChangeAuthority {};
+    let instruction = Instruction {
+        program_id: marinade_referral::marinade_referral::ID,
+        accounts: accounts.to_account_metas(None),
+        data: ix_data.data(),
+    };
+    println!("Changing authority from {} to {}", old_admin, new_admin);
+    test.try_execute_instruction(instruction, vec![test.fee_payer_signer(), signer.clone()])
+        .await
+}
+
+pub async fn update_referral_execute(
+    test: &mut IntegrationTest,
+    global_state: Pubkey,
+    admin_keypair: &Arc<Keypair>,
+    referral_state: Pubkey,
+    transfer_duration: u32,
+    pause: bool,
+    optional_new_partner_account: Option<Pubkey>,
+    operation_deposit_sol_fee: Option<u8>,
+    operation_deposit_stake_account_fee: Option<u8>,
+    operation_liquid_unstake_fee: Option<u8>,
+) -> Result<(), u32> {
+    let accounts = marinade_referral::accounts::UpdateReferral {
+        global_state,
+        admin_account: admin_keypair.pubkey(),
+        referral_state,
+    };
+    let ix_data = marinade_referral::instruction::UpdateReferral {
+        transfer_duration,
+        pause,
+        optional_new_partner_account,
+        operation_deposit_sol_fee,
+        operation_deposit_stake_account_fee,
+        operation_liquid_unstake_fee,
+    };
+    let instruction = Instruction {
+        program_id: marinade_referral::marinade_referral::ID,
+        accounts: accounts.to_account_metas(None),
+        data: ix_data.data(),
+    };
+    println!("Changing referral state {}", referral_state);
+    test.try_execute_instruction(
+        instruction,
+        vec![test.fee_payer_signer(), admin_keypair.clone()],
+    )
+    .await
+}
+
+#[test(tokio::test)]
+async fn test_init_global_state() -> anyhow::Result<()> {
+    let (mut test, marinade_referrals) = init_test().await?;
+
+    let global_state: marinade_referral::states::GlobalState =
+        get_account(&mut test, marinade_referrals.global_state_pubkey).await;
+    let referral_state: marinade_referral::states::ReferralState =
+        get_account(&mut test, marinade_referrals.partner_referral_state_pubkey).await;
+
+    assert_eq!(
+        marinade_referrals.admin_key.pubkey(),
+        global_state.admin_account,
+        "Global state 'admin key' does not match"
+    );
+    assert_eq!(
+        marinade_referrals.treasury_token_account_pubkey, global_state.treasury_msol_account,
+        "Global state 'treasury token account' key does not match"
+    );
+
+    assert_eq!(
+        "TEST_PART", referral_state.partner_name,
+        "Refferal state 'partner name' does not match"
+    );
+    assert_eq!(
+        marinade_referrals.partner.keypair.pubkey(),
+        referral_state.partner_account,
+        "Referral state 'partner account' does not match",
+    );
+    assert_eq!(
+        marinade_referrals.partner_token_pubkey, referral_state.token_partner_account,
+        "Referral state 'partner token account' does not match",
+    );
+    assert_eq!(
+        DEFAULT_TRANSFER_DURATION, referral_state.transfer_duration,
+        "Referral state 'transfer duration init' value does not correspond to default value",
+    );
+    assert!(
+        !referral_state.pause,
+        "Account init value of the 'pause' should be false",
+    );
+    assert_eq!(
+        DEFAULT_MAX_NET_STAKE, referral_state.max_net_stake,
+        "Referral state 'max net stake' init value does not correspond to default value",
+    );
+    assert_eq!(
+        DEFAULT_BASE_FEE_POINTS, referral_state.base_fee,
+        "Referral state 'base fee points' init value does not correspond to default value",
+    );
+    assert_eq!(
+        DEFAULT_MAX_FEE_POINTS, referral_state.max_fee,
+        "Referral state 'max fee points' init value does not correspond to default value",
+    );
+    assert_eq!(
+        DEFAULT_MAX_OPERATION_FEE_POINTS, referral_state.max_operation_fee,
+        "Referral state 'max operation fee' init value does not correspond to default value",
+    );
+    assert_eq!(
+        0, referral_state.operation_deposit_sol_fee,
+        "Operation 'deposit sol fee' should be init at 0",
+    );
+    assert_eq!(
+        0, referral_state.operation_deposit_stake_account_fee,
+        "Operation 'deposit stake account fee' should be init at 0",
+    );
+    assert_eq!(
+        0, referral_state.operation_liquid_unstake_fee,
+        "Operation 'liquid unstake fee' should be init at 0",
+    );
+
+    Ok(())
+}
+
+#[test(tokio::test)]
+async fn test_change_authority() -> anyhow::Result<()> {
+    let (mut test, marinade_referrals) = init_test().await?;
+
+    // changing authority to the same as it was before
+    change_authority_execute(
+        &mut test,
+        marinade_referrals.global_state_pubkey,
+        marinade_referrals.admin_key.pubkey(),
+        marinade_referrals.admin_key.pubkey(),
+        &marinade_referrals.admin_key,
+    )
+    .await
+    .unwrap();
+    let global_state: marinade_referral::states::GlobalState =
+        get_account(&mut test, marinade_referrals.global_state_pubkey).await;
+    assert_eq!(
+        marinade_referrals.admin_key.pubkey(),
+        global_state.admin_account,
+        "Global state admin key does not match after change authority"
+    );
+
+    // changing authority to a new admin account
+    let new_admin = Arc::new(Keypair::new());
+    change_authority_execute(
+        &mut test,
+        marinade_referrals.global_state_pubkey,
+        marinade_referrals.admin_key.pubkey(),
+        new_admin.pubkey(),
+        &marinade_referrals.admin_key,
+    )
+    .await
+    .unwrap();
+    let global_state: marinade_referral::states::GlobalState =
+        get_account(&mut test, marinade_referrals.global_state_pubkey).await;
+    assert_eq!(
+        new_admin.pubkey(),
+        global_state.admin_account,
+        "Global state admin key does not match to new admin after changing authority"
+    );
+
+    // changing authority to admin account that's not referred in the global state
+    // (correctly signed but admin account does not match the saved value)
+    let another_new_admin = Arc::new(Keypair::new());
+    let txn_result = change_authority_execute(
+        &mut test,
+        marinade_referrals.global_state_pubkey,
+        another_new_admin.pubkey(),
+        marinade_referrals.admin_key.pubkey(),
+        &another_new_admin,
+    )
+    .await;
+    match txn_result {
+        // https://github.com/coral-xyz/anchor/blob/v0.14.0/lang/src/error.rs
+        Err(error_number) => assert_eq!(141, error_number, "A constraint should be violated"),
+        _ => panic!("Expected the transaction fails with the contraint violation."),
+    }
+
+    let global_state: marinade_referral::states::GlobalState =
+        get_account(&mut test, marinade_referrals.global_state_pubkey).await;
+    assert_eq!(
+        new_admin.pubkey(),
+        global_state.admin_account,
+        "Global state admin key does not match after the changing authority failed"
+    );
+
+    Ok(())
+}
+
+#[test(tokio::test)]
+async fn test_update_referral() -> anyhow::Result<()> {
+    let (mut test, marinade_referrals) = init_test().await?;
+
+    // updating only with the required values
+    update_referral_execute(
+        &mut test,
+        marinade_referrals.global_state_pubkey,
+        &marinade_referrals.admin_key,
+        marinade_referrals.partner_referral_state_pubkey,
+        42,
+        true,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let referral_state: marinade_referral::states::ReferralState =
+        get_account(&mut test, marinade_referrals.partner_referral_state_pubkey).await;
+    assert_eq!(
+        42, referral_state.transfer_duration,
+        "Referral state update 'transfer duration' value does not match",
+    );
+    assert!(
+        referral_state.pause,
+        "Referral state update 'pause' value should be true",
+    );
+
+    // updating with optional values
+    let new_partner_account = Keypair::new();
+    update_referral_execute(
+        &mut test,
+        marinade_referrals.global_state_pubkey,
+        &marinade_referrals.admin_key,
+        marinade_referrals.partner_referral_state_pubkey,
+        43,
+        false,
+        Some(new_partner_account.pubkey()),
+        Some(31),
+        Some(32),
+        Some(DEFAULT_MAX_OPERATION_FEE_POINTS),
+    )
+    .await
+    .unwrap();
+    let referral_state: marinade_referral::states::ReferralState =
+        get_account(&mut test, marinade_referrals.partner_referral_state_pubkey).await;
+    assert_eq!(
+        43, referral_state.transfer_duration,
+        "Referral state update 'transfer duration' value does not match",
+    );
+    assert!(
+        !referral_state.pause,
+        "Referral state update 'pause' value should be false",
+    );
+    assert_eq!(
+        new_partner_account.pubkey() ,referral_state.partner_account,
+        "Referral state update 'partner account' should be changed",
+    );
+    assert_eq!(
+        31 ,referral_state.operation_deposit_sol_fee,
+        "Referral state update 'partner account' should be changed",
+    );
+    assert_eq!(
+        32 ,referral_state.operation_deposit_stake_account_fee,
+        "Referral state update 'partner account' should be changed",
+    );
+    assert_eq!(
+        DEFAULT_MAX_OPERATION_FEE_POINTS ,referral_state.operation_liquid_unstake_fee,
+        "Referral state update 'partner account' should be changed",
+    );
+
+    // updating with fee is above the permitted value
+    let txn_result = update_referral_execute(
+        &mut test,
+        marinade_referrals.global_state_pubkey,
+        &marinade_referrals.admin_key,
+        marinade_referrals.partner_referral_state_pubkey,
+        DEFAULT_TRANSFER_DURATION,
+        false,
+        None,
+        Some(DEFAULT_MAX_OPERATION_FEE_POINTS + 1),
+        None,
+        None,
+    )
+    .await;
+    match txn_result {
+        // https://github.com/coral-xyz/anchor/blob/v0.14.0/lang/src/error.rs
+        Err(error_number) => assert_eq!(309, error_number, "Contraint fee over max should be violated"),
+        _ => panic!("Expected the transaction fails with the contraint violation."),
+    }
+    let referral_state: marinade_referral::states::ReferralState =
+        get_account(&mut test, marinade_referrals.partner_referral_state_pubkey).await;
+    assert_eq!(
+        43, referral_state.transfer_duration,
+        "Referral state update 'transfer duration' value does not match",
+    );
+    assert_eq!(
+        31 ,referral_state.operation_deposit_sol_fee,
+        "Referral state update 'partner account' should be changed",
+    );
+
+    Ok(())
+}
