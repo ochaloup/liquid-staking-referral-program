@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 use futures::{Future, FutureExt};
 use marinade_finance_offchain_sdk::anchor_lang::solana_program::{
-    native_token::{lamports_to_sol, LAMPORTS_PER_SOL},
     program_pack::Pack,
     pubkey::Pubkey,
     stake,
@@ -21,7 +20,10 @@ use marinade_finance_offchain_sdk::anchor_lang::solana_program::{
     system_instruction, system_program, sysvar,
 };
 use marinade_finance_offchain_sdk::instruction_helpers::InstructionHelpers;
-use solana_sdk::{account::from_account, instruction::Instruction, transaction::Transaction};
+use solana_sdk::{
+    account::from_account, instruction::Instruction, transaction::Transaction,
+    native_token::{LAMPORTS_PER_SOL, lamports_to_sol}
+};
 
 use marinade_finance_offchain_sdk::anchor_lang::prelude::*;
 use marinade_finance_offchain_sdk::{
@@ -1003,7 +1005,6 @@ pub fn random_amount(from_sol: u64, to_sol: u64, rng: &mut impl RngCore) -> u64 
 pub struct MarinadeReferralTestGlobals {
     pub admin_key: Arc<Keypair>,
     pub global_state_pubkey: Pubkey,
-    pub treasury_token_account_pubkey: Pubkey,
     pub partner_referral_state_pubkey: Pubkey,
     pub partner: TestUser,
     pub msol_partner_token_pubkey: Pubkey,
@@ -1036,22 +1037,6 @@ pub async fn init_marinade_referral_test_globals(
     let token_partner_account = partner.get_or_create_msol_account_instruction(test).await;
     test.execute().await; // execute if the ATA needed to be created
 
-    // treasury token account
-    let (treasury_msol_auth_pda_pubkey, treasury_msol_auth_pda_bump) = Pubkey::find_program_address(
-        &[marinade_finance::constant::MSOL_TREASURY_AUTH_SEED],
-        &marinade_referral::marinade_referral::ID,
-    );
-    let treasury_token_account = test
-        .builder
-        .create_associated_token_account(
-            &treasury_msol_auth_pda_pubkey,
-            &test.state.msol_mint,
-            "treasury mSOL",
-        )
-        .unwrap();
-    println!("Created treasury_token_account {}", treasury_token_account);
-    test.execute().await;
-
     // global state: mRg6bDsAd5uwERAdNTynoUeRbqQsLa7yzuK2kkCUPGW
     let global_state_key_bytes: [u8; 64] = [
         134, 187, 164, 119, 110, 122, 23, 81, 124, 160, 171, 39, 43, 21, 99, 70, 76, 134, 197, 224,
@@ -1075,21 +1060,16 @@ pub async fn init_marinade_referral_test_globals(
             format!("pre-create marinade-referral global state acc because banks-clients do not support creation from program {}", global_state_pubkey),
         )
         .unwrap();
-    println!(
-        "create global state account {} & treasury account {}",
-        global_state_pubkey, treasury_msol_auth_pda_pubkey
-    );
+    println!("create global state account {}", global_state_pubkey);
     test.execute().await;
 
     {
         let accounts = marinade_referral::accounts::Initialize {
             admin_account: admin.keypair.pubkey(),
-            treasury_msol_account: treasury_token_account,
+            msol_mint_account: test.state.msol_mint,
             global_state: global_state_pubkey,
         };
-        let ix_data = marinade_referral::instruction::Initialize {
-            treasury_msol_auth_bump: treasury_msol_auth_pda_bump,
-        };
+        let ix_data = marinade_referral::instruction::Initialize {};
         let instruction = Instruction {
             program_id: marinade_referral::marinade_referral::ID,
             accounts: accounts.to_account_metas(None),
@@ -1132,10 +1112,9 @@ pub async fn init_marinade_referral_test_globals(
         let accounts = marinade_referral::accounts::InitReferralAccount {
             global_state: global_state_pubkey,
             admin_account: admin.keypair.pubkey(),
-            treasury_msol_account: treasury_token_account,
             referral_state: referral_state_pubkey,
             partner_account: partner.keypair.pubkey(),
-            token_partner_account: token_partner_account.pubkey,
+            msol_token_partner_account: token_partner_account.pubkey,
         };
         let ix_data = marinade_referral::instruction::InitReferralAccount {
             partner_name: "TEST_PART".into(),
@@ -1156,7 +1135,6 @@ pub async fn init_marinade_referral_test_globals(
     return MarinadeReferralTestGlobals {
         admin_key: admin.keypair,
         global_state_pubkey: global_state_pubkey,
-        treasury_token_account_pubkey: treasury_token_account,
         partner_referral_state_pubkey: referral_state_pubkey,
         msol_partner_token_pubkey: token_partner_account.pubkey,
         partner,

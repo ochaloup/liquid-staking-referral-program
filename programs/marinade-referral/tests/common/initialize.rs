@@ -1,32 +1,18 @@
 use marinade_finance_offchain_sdk::anchor_lang::prelude::*;
-use marinade_finance_offchain_sdk::spl_token;
 use marinade_finance_offchain_sdk::{
     instruction_helpers::{initialize::InitializeBuilder, InstructionHelpers},
     marinade_finance::{liq_pool::LiqPool, Fee, State, MAX_REWARD_FEE},
     transaction_builder::TransactionBuilder,
 };
-use solana_sdk::program_option::COption;
 use std::sync::Arc;
 
 use lazy_static::lazy_static;
 use marinade_finance_offchain_sdk::spl_associated_token_account::get_associated_token_address;
-//use marinade_reflection::marinade::Marinade;
 use rand::{distributions::Uniform, prelude::*};
-use rand_chacha::ChaChaRng;
-//use solana_program_test::{processor, BanksClient, ProgramTest};
 use solana_sdk::{
-    account::Account,
-    instruction::InstructionError,
-    program_pack::Pack,
     pubkey::Pubkey,
     signature::{Keypair, Signer},
-    //sysvar::clock::{self, Clock},
-    transaction::TransactionError,
 };
-use test_log::test;
-
-// TODO: remove?
-pub const MSOL_TREASURY_AUTH_SEED: &[u8] = b"mr_treasury";
 
 lazy_static! {
     static ref CREATOR_AUTHORITY: Arc<Keypair> = Arc::new(

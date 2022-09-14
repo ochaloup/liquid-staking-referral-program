@@ -6,7 +6,7 @@
 
 mod common;
 
-use anchor_lang::AccountDeserialize;
+use anchor_lang::{AccountDeserialize, InstructionData, ToAccountMetas};
 use common::{initialize::InitializeInputWithSeeds, integration_test::*};
 use std::sync::Arc;
 
@@ -15,12 +15,13 @@ use rand_chacha::ChaChaRng;
 
 use marinade_referral::constant::{
     DEFAULT_BASE_FEE_POINTS, DEFAULT_MAX_FEE_POINTS, DEFAULT_MAX_NET_STAKE,
-    DEFAULT_OPERATION_FEE_POINTS,
+    DEFAULT_OPERATION_FEE_POINTS, MAX_OPERATION_FEE_POINTS
 };
 use solana_sdk::{
     instruction::Instruction,
     pubkey::Pubkey,
     signature::{Keypair, Signer},
+    native_token::LAMPORTS_PER_SOL,
 };
 use test_log::test;
 
@@ -82,25 +83,27 @@ pub async fn update_referral_execute(
     global_state: Pubkey,
     admin_keypair: &Arc<Keypair>,
     referral_state: Pubkey,
-    transfer_duration: u32,
+    new_partner_account: Pubkey,
+    new_msol_token_partner_account: Pubkey,
     pause: bool,
-    optional_new_partner_account: Option<Pubkey>,
     operation_deposit_sol_fee: Option<u8>,
     operation_deposit_stake_account_fee: Option<u8>,
     operation_liquid_unstake_fee: Option<u8>,
+    operation_delayed_unstake_fee: Option<u8>,
 ) -> Result<(), u32> {
     let accounts = marinade_referral::accounts::UpdateReferral {
         global_state,
         admin_account: admin_keypair.pubkey(),
         referral_state,
+        new_partner_account,
+        new_msol_token_partner_account,
     };
     let ix_data = marinade_referral::instruction::UpdateReferral {
-        transfer_duration,
         pause,
-        optional_new_partner_account,
         operation_deposit_sol_fee,
         operation_deposit_stake_account_fee,
         operation_liquid_unstake_fee,
+        operation_delayed_unstake_fee,
     };
     let instruction = Instruction {
         program_id: marinade_referral::marinade_referral::ID,
@@ -130,7 +133,7 @@ async fn test_init_global_state() -> anyhow::Result<()> {
         "Global state 'admin key' does not match"
     );
     assert_eq!(
-        marinade_referrals.treasury_token_account_pubkey, global_state.treasury_msol_account,
+        test.state.msol_mint, global_state.msol_mint_account,
         "Global state 'treasury token account' key does not match"
     );
 
@@ -164,19 +167,19 @@ async fn test_init_global_state() -> anyhow::Result<()> {
         "Referral state 'max fee points' init value does not correspond to default value",
     );
     assert_eq!(
-        DEFAULT_OPERATION_FEE_POINTS, referral_state.operation_deposit_sol_fee,
+        DEFAULT_OPERATION_FEE_POINTS, referral_state.operation_deposit_sol_fee.basis_points,
         "Operation 'deposit sol fee' should be init at init value",
     );
     assert_eq!(
-        DEFAULT_OPERATION_FEE_POINTS, referral_state.operation_deposit_stake_account_fee,
+        DEFAULT_OPERATION_FEE_POINTS, referral_state.operation_deposit_stake_account_fee.basis_points,
         "Operation 'deposit stake account fee' should be init value",
     );
     assert_eq!(
-        DEFAULT_OPERATION_FEE_POINTS, referral_state.operation_liquid_unstake_fee,
+        DEFAULT_OPERATION_FEE_POINTS, referral_state.operation_liquid_unstake_fee.basis_points,
         "Operation 'liquid unstake fee' should be init value",
     );
     assert_eq!(
-        DEFAULT_OPERATION_FEE_POINTS, referral_state.operation_delayed_unstake_fee,
+        DEFAULT_OPERATION_FEE_POINTS, referral_state.operation_delayed_unstake_fee.basis_points,
         "Operation 'delayed unstake fee' should be init value",
     );
 
@@ -262,7 +265,8 @@ async fn test_update_referral() -> anyhow::Result<()> {
         marinade_referrals.global_state_pubkey,
         &marinade_referrals.admin_key,
         marinade_referrals.partner_referral_state_pubkey,
-        42,
+        marinade_referrals.partner.keypair.pubkey(),
+        marinade_referrals.msol_partner_token_pubkey,
         true,
         None,
         None,
@@ -273,56 +277,63 @@ async fn test_update_referral() -> anyhow::Result<()> {
     .unwrap();
     let referral_state: marinade_referral::states::ReferralState =
         get_account(&mut test, marinade_referrals.partner_referral_state_pubkey).await;
-    assert_eq!(
-        42, referral_state.transfer_duration,
-        "Referral state update 'transfer duration' value does not match",
-    );
     assert!(
         referral_state.pause,
         "Referral state update 'pause' value should be true",
     );
 
     // updating with optional values
-    let new_partner_account = Keypair::new();
+    let new_partner = test
+        .create_test_user("test_referral_partner", LAMPORTS_PER_SOL)
+        .await;
+    // partner token account
+    let new_token_partner_account = new_partner.get_or_create_msol_account_instruction(&mut test).await;
+    test.execute().await; // execute if the ATA needed to be created
     update_referral_execute(
         &mut test,
         marinade_referrals.global_state_pubkey,
         &marinade_referrals.admin_key,
         marinade_referrals.partner_referral_state_pubkey,
-        43,
+        new_partner.keypair.pubkey(),
+        new_token_partner_account.pubkey,
         false,
-        Some(new_partner_account.pubkey()),
         Some(31),
         Some(32),
-        Some(DEFAULT_MAX_OPERATION_FEE_POINTS),
+        Some(33),
+        Some(MAX_OPERATION_FEE_POINTS as u8),
     )
     .await
     .unwrap();
     let referral_state: marinade_referral::states::ReferralState =
         get_account(&mut test, marinade_referrals.partner_referral_state_pubkey).await;
-    assert_eq!(
-        43, referral_state.transfer_duration,
-        "Referral state update 'transfer duration' value does not match",
-    );
     assert!(
         !referral_state.pause,
         "Referral state update 'pause' value should be false",
     );
     assert_eq!(
-        new_partner_account.pubkey(),
+        new_partner.keypair.pubkey(),
         referral_state.partner_account,
         "Referral state update 'partner account' should be changed",
     );
     assert_eq!(
-        31, referral_state.operation_deposit_sol_fee,
+        new_token_partner_account.pubkey,
+        referral_state.msol_token_partner_account,
+        "Referral state update 'msol token partner account' should be changed",
+    );
+    assert_eq!(
+        31, referral_state.operation_deposit_sol_fee.basis_points,
         "Referral state update 'partner account' should be changed",
     );
     assert_eq!(
-        32, referral_state.operation_deposit_stake_account_fee,
+        32, referral_state.operation_deposit_stake_account_fee.basis_points,
         "Referral state update 'partner account' should be changed",
     );
     assert_eq!(
-        DEFAULT_MAX_OPERATION_FEE_POINTS, referral_state.operation_liquid_unstake_fee,
+        33, referral_state.operation_liquid_unstake_fee.basis_points,
+        "Referral state update 'partner account' should be changed",
+    );
+    assert_eq!(
+        MAX_OPERATION_FEE_POINTS, referral_state.operation_delayed_unstake_fee.basis_points,
         "Referral state update 'partner account' should be changed",
     );
 
@@ -332,10 +343,11 @@ async fn test_update_referral() -> anyhow::Result<()> {
         marinade_referrals.global_state_pubkey,
         &marinade_referrals.admin_key,
         marinade_referrals.partner_referral_state_pubkey,
-        DEFAULT_TRANSFER_DURATION,
+        marinade_referrals.partner.keypair.pubkey(),
+        marinade_referrals.msol_partner_token_pubkey,
         false,
         None,
-        Some(DEFAULT_MAX_OPERATION_FEE_POINTS + 1),
+        Some(MAX_OPERATION_FEE_POINTS as u8 + 1),
         None,
         None,
     )
@@ -351,11 +363,7 @@ async fn test_update_referral() -> anyhow::Result<()> {
     let referral_state: marinade_referral::states::ReferralState =
         get_account(&mut test, marinade_referrals.partner_referral_state_pubkey).await;
     assert_eq!(
-        43, referral_state.transfer_duration,
-        "Referral state update 'transfer duration' value does not match",
-    );
-    assert_eq!(
-        31, referral_state.operation_deposit_sol_fee,
+        31, referral_state.operation_deposit_sol_fee.basis_points,
         "Referral state update 'partner account' should be changed",
     );
 
