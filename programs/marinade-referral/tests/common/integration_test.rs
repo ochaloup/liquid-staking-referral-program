@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+
 //use assert_json_diff::assert_json_eq;
 use marinade_finance_offchain_sdk::anchor_lang::InstructionData;
 use marinade_finance_offchain_sdk::marinade_finance;
@@ -30,6 +31,7 @@ use marinade_finance_offchain_sdk::{
 
 use solana_program_test::{processor, BanksClient, ProgramTest, ProgramTestContext};
 
+use super::initialize::InitializeInput;
 use anyhow::anyhow;
 use marinade_finance_offchain_sdk::spl_associated_token_account::get_associated_token_address;
 use marinade_finance_offchain_sdk::spl_token::state::Account as TokenAccount;
@@ -44,14 +46,6 @@ use solana_vote_program::{
     vote_instruction,
     vote_state::{VoteInit, VoteState},
 };
-
-use crate::initialize::InitializeInput;
-
-pub mod test_add_remove_liquidity;
-pub mod test_delayed_unstake;
-pub mod test_deposit_sol_liquid_unstake;
-pub mod test_deposit_stake_account;
-pub mod test_state_initialization;
 
 pub struct StakeInfo {
     pub index: u32,
@@ -1007,12 +1001,12 @@ pub fn random_amount(from_sol: u64, to_sol: u64, rng: &mut impl RngCore) -> u64 
 // --------------------------------
 //
 pub struct MarinadeReferralTestGlobals {
-    admin_key: Arc<Keypair>,
-    global_state_pubkey: Pubkey,
-    treasury_token_account_pubkey: Pubkey,
-    partner_referral_state_pubkey: Pubkey,
-    partner: TestUser,
-    partner_token_pubkey: Pubkey,
+    pub admin_key: Arc<Keypair>,
+    pub global_state_pubkey: Pubkey,
+    pub treasury_token_account_pubkey: Pubkey,
+    pub partner_referral_state_pubkey: Pubkey,
+    pub partner: TestUser,
+    pub msol_partner_token_pubkey: Pubkey,
 }
 
 // initialize marinade-referral global state & a referral-account
@@ -1044,7 +1038,7 @@ pub async fn init_marinade_referral_test_globals(
 
     // treasury token account
     let (treasury_msol_auth_pda_pubkey, treasury_msol_auth_pda_bump) = Pubkey::find_program_address(
-        &[marinade_referral::constant::MSOL_TREASURY_AUTH_SEED],
+        &[marinade_finance::constant::MSOL_TREASURY_AUTH_SEED],
         &marinade_referral::marinade_referral::ID,
     );
     let treasury_token_account = test
@@ -1164,7 +1158,7 @@ pub async fn init_marinade_referral_test_globals(
         global_state_pubkey: global_state_pubkey,
         treasury_token_account_pubkey: treasury_token_account,
         partner_referral_state_pubkey: referral_state_pubkey,
-        partner_token_pubkey: token_partner_account.pubkey,
+        msol_partner_token_pubkey: token_partner_account.pubkey,
         partner,
     };
 }

@@ -3,7 +3,11 @@
 // global state and referral state initialization
 // RUSTFLAGS=-Awarnings cargo test test_state_initialization --manifest-path programs/marinade-referral/tests/Cargo.toml
 //
-use crate::{initialize::InitializeInputWithSeeds, integration_test::*};
+
+mod common;
+
+use anchor_lang::AccountDeserialize;
+use common::{initialize::InitializeInputWithSeeds, integration_test::*};
 use std::sync::Arc;
 
 use rand::SeedableRng;
@@ -11,13 +15,14 @@ use rand_chacha::ChaChaRng;
 
 use marinade_referral::constant::{
     DEFAULT_BASE_FEE_POINTS, DEFAULT_MAX_FEE_POINTS, DEFAULT_MAX_NET_STAKE,
-    DEFAULT_MAX_OPERATION_FEE_POINTS, DEFAULT_TRANSFER_DURATION,
+    DEFAULT_OPERATION_FEE_POINTS,
 };
 use solana_sdk::{
+    instruction::Instruction,
     pubkey::Pubkey,
     signature::{Keypair, Signer},
 };
-use test_env_log::test;
+use test_log::test;
 
 async fn init_test() -> anyhow::Result<(IntegrationTest, MarinadeReferralTestGlobals)> {
     let mut random = ChaChaRng::from_seed([
@@ -139,12 +144,8 @@ async fn test_init_global_state() -> anyhow::Result<()> {
         "Referral state 'partner account' does not match",
     );
     assert_eq!(
-        marinade_referrals.partner_token_pubkey, referral_state.token_partner_account,
+        marinade_referrals.msol_partner_token_pubkey, referral_state.msol_token_partner_account,
         "Referral state 'partner token account' does not match",
-    );
-    assert_eq!(
-        DEFAULT_TRANSFER_DURATION, referral_state.transfer_duration,
-        "Referral state 'transfer duration init' value does not correspond to default value",
     );
     assert!(
         !referral_state.pause,
@@ -163,20 +164,20 @@ async fn test_init_global_state() -> anyhow::Result<()> {
         "Referral state 'max fee points' init value does not correspond to default value",
     );
     assert_eq!(
-        DEFAULT_MAX_OPERATION_FEE_POINTS, referral_state.max_operation_fee,
-        "Referral state 'max operation fee' init value does not correspond to default value",
+        DEFAULT_OPERATION_FEE_POINTS, referral_state.operation_deposit_sol_fee,
+        "Operation 'deposit sol fee' should be init at init value",
     );
     assert_eq!(
-        0, referral_state.operation_deposit_sol_fee,
-        "Operation 'deposit sol fee' should be init at 0",
+        DEFAULT_OPERATION_FEE_POINTS, referral_state.operation_deposit_stake_account_fee,
+        "Operation 'deposit stake account fee' should be init value",
     );
     assert_eq!(
-        0, referral_state.operation_deposit_stake_account_fee,
-        "Operation 'deposit stake account fee' should be init at 0",
+        DEFAULT_OPERATION_FEE_POINTS, referral_state.operation_liquid_unstake_fee,
+        "Operation 'liquid unstake fee' should be init value",
     );
     assert_eq!(
-        0, referral_state.operation_liquid_unstake_fee,
-        "Operation 'liquid unstake fee' should be init at 0",
+        DEFAULT_OPERATION_FEE_POINTS, referral_state.operation_delayed_unstake_fee,
+        "Operation 'delayed unstake fee' should be init value",
     );
 
     Ok(())
@@ -308,19 +309,20 @@ async fn test_update_referral() -> anyhow::Result<()> {
         "Referral state update 'pause' value should be false",
     );
     assert_eq!(
-        new_partner_account.pubkey() ,referral_state.partner_account,
+        new_partner_account.pubkey(),
+        referral_state.partner_account,
         "Referral state update 'partner account' should be changed",
     );
     assert_eq!(
-        31 ,referral_state.operation_deposit_sol_fee,
+        31, referral_state.operation_deposit_sol_fee,
         "Referral state update 'partner account' should be changed",
     );
     assert_eq!(
-        32 ,referral_state.operation_deposit_stake_account_fee,
+        32, referral_state.operation_deposit_stake_account_fee,
         "Referral state update 'partner account' should be changed",
     );
     assert_eq!(
-        DEFAULT_MAX_OPERATION_FEE_POINTS ,referral_state.operation_liquid_unstake_fee,
+        DEFAULT_MAX_OPERATION_FEE_POINTS, referral_state.operation_liquid_unstake_fee,
         "Referral state update 'partner account' should be changed",
     );
 
@@ -340,7 +342,10 @@ async fn test_update_referral() -> anyhow::Result<()> {
     .await;
     match txn_result {
         // https://github.com/coral-xyz/anchor/blob/v0.14.0/lang/src/error.rs
-        Err(error_number) => assert_eq!(309, error_number, "Contraint fee over max should be violated"),
+        Err(error_number) => assert_eq!(
+            309, error_number,
+            "Contraint fee over max should be violated"
+        ),
         _ => panic!("Expected the transaction fails with the contraint violation."),
     }
     let referral_state: marinade_referral::states::ReferralState =
@@ -350,7 +355,7 @@ async fn test_update_referral() -> anyhow::Result<()> {
         "Referral state update 'transfer duration' value does not match",
     );
     assert_eq!(
-        31 ,referral_state.operation_deposit_sol_fee,
+        31, referral_state.operation_deposit_sol_fee,
         "Referral state update 'partner account' should be changed",
     );
 
